@@ -2,16 +2,15 @@ import time
 import zipfile
 from typing import Tuple
 
-import numpy as np
 import pandas
 import requests
+from tqdm import tqdm
 from PIL import Image, ImageDraw, ImageFont
 from bs4 import BeautifulSoup
 from pathlib import Path
 
 from pandas import DataFrame
 from requests import HTTPError
-from tqdm import trange
 
 CVAT_URL = 'localhost:9080'
 ORG = 'AutoDidact'
@@ -22,8 +21,8 @@ SESSION_ID = ''
 OUT = Path('out')
 LABELS = 'Bed', 'Staff', 'Devices', 'Patient'
 
-def download_dataset(task_id: int) -> Path:
-    out = OUT / f"{task_id}"
+def download_dataset(task_id: int, folder: Path) -> Path:
+    out = folder / f"{task_id}"
     zip_path = out.with_name(f"{task_id}.zip")
     zip_path.unlink(missing_ok=True)
     if out.exists():
@@ -88,26 +87,27 @@ def download_dataset(task_id: int) -> Path:
     zip_path.unlink()
     return out
 
-def read_data_subset(subset_folder: Path) -> dict:
+def read_data_subset(subset_folder: Path, task_id: int) -> dict:
     assert subset_folder.is_dir()
     xml = BeautifulSoup(open(subset_folder / 'annotations.xml', 'r'), "xml")
     labels = {}
     for label in xml.select('annotations meta task labels label'):
         labels[label.select_one('name').text] = label.select_one('color').text
     assert labels.keys() == set(LABELS)
+    source = xml.select_one('annotations meta source').text
     data = {
         'version': xml.select_one('annotations version').text,
         'labels': labels,
-        'source': xml.select_one('annotations meta source').text,
         'size': int(xml.select_one('annotations meta task size').text),
     }
-    index = []
     gt = []
     for track in xml.select('annotations track'):
         assert track['label'] in LABELS
         for box in track.select('box'):
-            index.append(int(box['frame']))
             gt.append({
+                'task': task_id,
+                'frame': int(box['frame']),
+                'source': source,
                 'label': LABELS.index(track['label']),
                 'xtl': float(box['xtl']),
                 'ytl': float(box['ytl']),
@@ -115,9 +115,22 @@ def read_data_subset(subset_folder: Path) -> dict:
                 'ybr': float(box['ybr']),
                 'rotation': float(box.get('rotation', "0.0")),
             })
-    data['gt'] = DataFrame(gt, index=index).sort_index()
+    data['gt'] = DataFrame(gt).set_index(['task', 'frame']).sort_index()
     assert len(list((subset_folder / 'images').rglob('*.PNG'))) == int(data['size'])
     return data
+
+def concat_data_subsets(dataset: dict, extension: dict) -> dict:
+    if len(dataset) == 0:
+        dataset = {
+            'version': extension['version'],
+            'labels': extension['labels'],
+            'size': 0,
+            'gt': DataFrame(columns=extension['gt'].columns),
+        }
+    assert dataset['labels'] == extension['labels']
+    dataset['size'] += extension['size']
+    dataset['gt'] = pandas.concat([dataset['gt'], extension['gt']])
+    return dataset
 
 def draw_bbox(draw: ImageDraw.ImageDraw, xtl: float, ytl: float, xbr: float, ybr: float, color: str, size: Tuple[int, int], label: str = None):
     bbox = [(xtl, ytl), (xbr, ytl), (xbr, ybr), (xtl, ybr), (xtl, ytl)]
@@ -137,17 +150,17 @@ def draw_bbox(draw: ImageDraw.ImageDraw, xtl: float, ytl: float, xbr: float, ybr
         draw.rectangle((x0, y0, x1, y1), fill='#303030')
         draw.text((x0 + 2, y0 + 2), label, color)
 
-def visualize_sample(idx: int, data: dict, folder: Path, save_to_disk: bool = False) -> Image.Image:
-    out = folder / 'visualized'
+def visualize_sample(idx: Tuple[int, int], data: dict, folder: Path, save_to_disk: bool = False) -> Image.Image:
+    out = folder / str(idx[0]) / 'visualized'
     out.mkdir(exist_ok=True)
-    img_path = folder / 'images' / f"frame_{idx:06}.PNG"
+    img_path = folder / str(idx[0]) / 'images' / f"frame_{idx[1]:06}.PNG"
     assert img_path.exists()
     vis_path = out / img_path.name
     img = Image.open(img_path)
     # img = img.convert('RGBA')
     draw = ImageDraw.Draw(img)
     ann = data['gt'].loc[[idx]]
-    for frame, (label, xtl, ytl, xbr, ybr, rot) in ann.iterrows():
+    for (task, frame), (source, label, xtl, ytl, xbr, ybr, rot) in ann.iterrows():
         cls = LABELS[int(label)]
         col = data['labels'][cls]
         draw_bbox(draw, xtl, ytl, xbr, ybr, col, img.size, cls)
@@ -157,15 +170,17 @@ def visualize_sample(idx: int, data: dict, folder: Path, save_to_disk: bool = Fa
 
 def visualize_dataset(data: dict, folder: Path, save_to_disk: bool = True):
     print('Visualizing dataset')
-    for idx in trange(data['size']):
+    index = data['gt'].index.unique()
+    for idx in tqdm(index):
         visualize_sample(idx, data, folder, save_to_disk=save_to_disk)
 
 if __name__ == '__main__':
+    dataset = {}
     for task_id in range(200):
         try:
-            path = download_dataset(task_id)
+            path = download_dataset(task_id, OUT)
         except HTTPError as err:
             continue
         print("Task", task_id, "in", str(path))
-        data = read_data_subset(path)
-        visualize_dataset(data, path)
+        dataset = concat_data_subsets(dataset, read_data_subset(path, task_id))
+    visualize_dataset(dataset, OUT)
