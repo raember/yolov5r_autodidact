@@ -34,3 +34,7 @@ seaborn>=0.11.0
 # pycocotools>=2.0  # COCO mAP
 # roboflow
 thop  # FLOPs computation
+
+# Scripts
+beautifulsoup4
+lxml
