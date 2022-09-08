@@ -3,9 +3,10 @@ import time
 import zipfile
 from typing import Tuple
 
+import numpy as np
 import pandas
 import requests
-from tqdm import tqdm
+from tqdm import tqdm, trange
 from PIL import Image, ImageDraw, ImageFont
 from bs4 import BeautifulSoup
 from pathlib import Path
@@ -137,9 +138,11 @@ def read_data_subset(subset_folder: Path, task_id: int) -> dict:
             cy = (y0 + y1) / 2
             w = x1 - x0
             h = y1 - y0
-            rot = float(box.get('rotation', "0.0")) % 180
+            rot = float(box.get('rotation', "0.0"))
             if h > w:
                 w, h = h, w
+                rot += 90
+            rot  %= 180
             gt.append({
                 'task': task_id,
                 'frame': int(box['frame']),
@@ -173,16 +176,27 @@ def concat_data_subsets(dataset: dict, extension: dict) -> dict:
     dataset['gt'] = pandas.concat([dataset['gt'], extension['gt']])
     return dataset
 
-def draw_bbox(draw: ImageDraw.ImageDraw, cx: float, cy: float, w: float, h: float, color: str, size: Tuple[int, int], label: str = None):
+
+def rotate(arr: np.ndarray, angle: float) -> np.ndarray:
+    ar = arr.copy()
+    theta = np.radians(angle)
+    c, s = np.cos(theta), np.sin(theta)
+    R = np.array(((c, -s), (s, c)))
+    center = np.array([np.mean(arr.T[0]), np.mean(arr.T[1])])
+    ar = ar.reshape((4, 2)) - center
+    ar = ar.dot(R) + center
+    return ar
+
+def draw_bbox(draw: ImageDraw.ImageDraw, cx: float, cy: float, w: float, h: float, rot: float, color: str, size: Tuple[int, int], label: str = None):
     xtl = cx - w/2
     ytl = cy - h/2
     xbr = cx + w/2
     ybr = cy + h/2
-    bbox = [(xtl, ytl), (xbr, ytl), (xbr, ybr), (xtl, ybr), (xtl, ytl)]
-    draw.line(bbox, fill=color, width=3)
+    bbox = rotate(np.array([(xtl, ytl), (xbr, ytl), (xbr, ybr), (xtl, ybr)]), rot)
+    draw.line(list(map(tuple, np.concatenate([bbox, bbox[0:1]]).tolist())), fill=color, width=3)
     if label is not None:
-        x0 = min(xtl, xbr)
-        y0 = max(ytl, ybr)
+        x0 = np.min(bbox.T[0])
+        y0 = np.min(bbox.T[1])
         _, _, x1, y1 = ImageFont.load_default().getbbox(label)
         x1 += x0 + 4
         y1 += y0 + 4
@@ -212,7 +226,7 @@ def visualize_sample(idx: Tuple[int, int], data: dict, folder: Path, save_to_dis
     for (task, frame), (source, label, cx, cy, w, h, rot) in ann.iterrows():
         cls = LABELS[int(label)]
         col = data['labels'][cls]
-        draw_bbox(draw, cx, cy, w, h, col, img.size, cls)
+        draw_bbox(draw, cx, cy, w, h, rot, col, img.size, cls)
     if save_to_disk:
         img.save(vis_path)
     return img
@@ -223,25 +237,26 @@ def visualize_dataset(data: dict, folder: Path, save_to_disk: bool = True):
     for idx in tqdm(index):
         visualize_sample(idx, data, folder, save_to_disk=save_to_disk)
 
-def to_yaml(data: dict, root_path: Path, name: str):
+def to_yaml(data: dict, root_path: Path, name: str, set_names: Tuple[str, str, str]):
     path = Path('data', name).with_suffix('.yaml')
     with open(path, 'w') as fp:
         fp.write(f'path: {root_path}\n')
-        fp.write('train: train.txt\n')
-        fp.write('val: val.txt\n')
-        fp.write('test: test.txt\n')
-        fp.write(f'nc: {len(data["labels"])}\n')
-        fp.write(f'names: [{", ".join(data["labels"].keys())}]\n')
+        fp.write(f'train: {set_names[0]}.txt\n')
+        fp.write(f'val: {set_names[1]}.txt\n')
+        fp.write(f'test: {set_names[2]}.txt\n')
+        labels = list(map(lambda s: f"'{s}'", data["labels"].keys()))
+        fp.write(f'nc: {len(labels)}\n')
+        fp.write(f'names: [{", ".join(labels)}]\n')
 
 def to_coco(root_path: Path, data: dict, data_folder: Path):
-    set_name = ORG.lower()
-    base_dir = root_path / set_name
+    print("Exporting to coco format")
+    dataset_name = ORG.lower()
+    base_dir = root_path / dataset_name
     img_dir = base_dir / 'images'
     shutil.rmtree(str(img_dir), ignore_errors=True)
     img_dir.mkdir(parents=True)
     label_dir = base_dir / 'labels'
     label_dir.mkdir(exist_ok=True)
-    to_yaml(data, root_path, set_name)
     index = data['gt'].index.unique()
     total = len(index)
     files = {
@@ -249,23 +264,24 @@ def to_coco(root_path: Path, data: dict, data_folder: Path):
         'val': 0.15,
         'test': 0.15,
     }
+    to_yaml(data, root_path, dataset_name, tuple(files.keys()))
     idx = 0
-    for set_name, ratio in files.items():
+    for dataset_name, ratio in files.items():
         count = int(total * ratio)
-        files[set_name] = (idx, idx + count)
+        files[dataset_name] = (idx, idx + count)
         idx += count
-    files[set_name] = (files[set_name][0], total)
+    files[dataset_name] = (files[dataset_name][0], total)
     with tqdm(total=total) as bar:
-        for set_name, (idx0, idx1) in files.items():
-            with open(base_dir / (set_name + '.txt'), 'w') as index_file:
+        for dataset_name, (idx0, idx1) in files.items():
+            with open(base_dir / (dataset_name + '.txt'), 'w') as index_file:
                 for idx in index[idx0:idx1]:
                     task, frame = idx
                     name = f"task_{task:03}_frame_{frame:06}"
                     # Save frame
-                    new_img_path = img_dir / set_name / f"{name}.png"
+                    new_img_path = img_dir / dataset_name / f"{name}.png"
                     new_img_path.parent.mkdir(exist_ok=True)
                     img_path = data_folder / str(task) / 'images' / idx_to_img_path(*idx)
-                    assert img_path.exists()
+                    assert img_path.exists(), f"Image not found at {img_path}"
                     new_img_path.hardlink_to(img_path)
                     index_file.write(f"{new_img_path}\n")
 
@@ -286,8 +302,8 @@ if __name__ == '__main__':
         except HTTPError as err:
             continue
         except Exception as err:
-            print(err)
-        print("Task", task_id, "in", str(path))
+            tqdm.write(f"Task {task_id}: {str(err)}")
+            continue
         dataset = concat_data_subsets(dataset, read_data_subset(path, task_id))
     to_coco(Path('..', 'datasets'), dataset, OUT)
     visualize_dataset(dataset, OUT)
