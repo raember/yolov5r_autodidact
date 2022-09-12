@@ -240,7 +240,7 @@ def visualize_dataset(data: dict, folder: Path, save_to_disk: bool = True):
 def to_yaml(data: dict, root_path: Path, name: str, set_names: Tuple[str, str, str]):
     path = Path('data', name).with_suffix('.yaml')
     with open(path, 'w') as fp:
-        fp.write(f'path: {root_path}\n')
+        fp.write(f'path: {root_path / name}\n')
         fp.write(f'train: {set_names[0]}.txt\n')
         fp.write(f'val: {set_names[1]}.txt\n')
         fp.write(f'test: {set_names[2]}.txt\n')
@@ -249,7 +249,7 @@ def to_yaml(data: dict, root_path: Path, name: str, set_names: Tuple[str, str, s
         fp.write(f'names: [{", ".join(labels)}]\n')
 
 def to_coco(root_path: Path, data: dict, data_folder: Path):
-    print("Exporting to coco format")
+    print("Exporting to yolov5 format")
     dataset_name = ORG.lower()
     base_dir = root_path / dataset_name
     img_dir = base_dir / 'images'
@@ -273,30 +273,32 @@ def to_coco(root_path: Path, data: dict, data_folder: Path):
     files[dataset_name] = (files[dataset_name][0], total)
     with tqdm(total=total) as bar:
         for dataset_name, (idx0, idx1) in files.items():
+            set_label_dir = label_dir / dataset_name
+            set_label_dir.mkdir(exist_ok=True)
+            set_img_dir = img_dir / dataset_name
+            set_img_dir.mkdir(exist_ok=True)
             with open(base_dir / (dataset_name + '.txt'), 'w') as index_file:
                 for idx in index[idx0:idx1]:
                     task, frame = idx
                     name = f"task_{task:03}_frame_{frame:06}"
                     # Save frame
-                    new_img_path = img_dir / dataset_name / f"{name}.png"
-                    new_img_path.parent.mkdir(exist_ok=True)
-                    img_path = data_folder / str(task) / 'images' / idx_to_img_path(*idx)
-                    assert img_path.exists(), f"Image not found at {img_path}"
-                    new_img_path.hardlink_to(img_path)
+                    new_img_path = set_img_dir / f"{name}.png"
+                    orig_img_path = data_folder / str(task) / 'images' / idx_to_img_path(*idx)
+                    assert orig_img_path.exists(), f"Image not found at {orig_img_path}"
+                    new_img_path.hardlink_to(orig_img_path)
                     index_file.write(f"{new_img_path}\n")
 
                     # Save labels
-                    with open(label_dir / f"{name}.txt", 'w') as label_file:
+                    with open(set_label_dir / f"{name}.txt", 'w') as label_file:
                         ann = data['gt'].loc[[idx]]
                         for (task, frame), (source, label, cx, cy, w, h, rot) in ann.iterrows():
                             cls = LABELS[int(label)]
-                            col = data['labels'][cls]
-                            label_file.write(f"{label} {cx} {cy} {w} {h} {rot}\n")
+                            label_file.write(f"{label} {cx} {cy} {w} {h} {int(rot)}\n")
                     bar.update()
 
 if __name__ == '__main__':
     dataset = {}
-    for task_id in range(200):
+    for task_id in trange(200):
         try:
             path = download_dataset(task_id, OUT)
         except HTTPError as err:
