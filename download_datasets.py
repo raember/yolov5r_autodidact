@@ -277,6 +277,7 @@ def to_coco(root_path: Path, data: dict, data_folder: Path):
             set_label_dir.mkdir(exist_ok=True)
             set_img_dir = img_dir / dataset_name
             set_img_dir.mkdir(exist_ok=True)
+            (base_dir / (dataset_name + '.cache')).unlink(missing_ok=True)
             with open(base_dir / (dataset_name + '.txt'), 'w') as index_file:
                 for idx in index[idx0:idx1]:
                     task, frame = idx
