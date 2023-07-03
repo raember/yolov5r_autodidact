@@ -1,3 +1,20 @@
+# Autodidact project and paper code
+This fork was used for the Autodidact project which resulted in the paper [Video object detection for privacy-preserving patient monitoring in intensive care](https://arxiv.org/abs/2306.14620).
+The paper was accepted and presented at the 10th Swiss Conference on Data Science ([SDS2023](https://sds2023.ch/)).
+
+BibTeX reference:
+```tex
+@InProceedings{Emberger2023,
+  author    = {Raphael Emberger and Jens Michael Boss and Daniel Baumann and Marko Seric and Shufan Huo and Lukas Tuggener Emanuela Keller and Thilo Stadelmann},
+  booktitle = {2023 10th Swiss Conference on Data Science (SDS)},
+  title     = {Video object detection for privacy-preserving patient monitoring in intensive care},
+  year      = {2023},
+  month     = jun,
+  doi       = {10.21256/zhaw-27810},
+}
+```
+
+---
 <div align="center">
 <p>
    <a align="left" href="https://ultralytics.com/yolov5" target="_blank">
