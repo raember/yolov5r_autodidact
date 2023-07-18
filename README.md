@@ -1,4 +1,6 @@
 # Autodidact project and paper code
+[![arxiv.org](http://img.shields.io/badge/cs.CV-arXiv%3A2306.14620-B31B1B.svg)](https://arxiv.org/abs/2306.14620)
+
 This fork was used for the Autodidact project which resulted in the paper [Video object detection for privacy-preserving patient monitoring in intensive care](https://arxiv.org/abs/2306.14620).
 The paper was accepted and presented at the 10th Swiss Conference on Data Science ([SDS2023](https://sds2023.ch/)).
 
